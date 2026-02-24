@@ -1,0 +1,1237 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Otago Grade Dashboard</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: #000; color: white; font-family: -apple-system, sans-serif; }
+        .glass { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 20px; }
+        .search-input { background: rgba(255, 255, 255, 0.1); border: none; outline: none; transition: 0.3s; }
+        .search-input:focus { background: rgba(255, 255, 255, 0.15); box-shadow: 0 0 0 2px #3b82f6; }
+        
+        .term-btn { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; position: relative; }
+        .term-btn:active { transform: scale(0.95); }
+        .term-btn.active-all { background: rgba(255, 255, 255, 0.15); color: white; border-color: rgba(255,255,255,0.3); }
+        .term-btn.active-ss { background: rgba(245, 158, 11, 0.25); color: #f59e0b; border-color: rgba(245, 158, 11, 0.5); box-shadow: 0 0 15px rgba(245, 158, 11, 0.1); }
+        .term-btn.active-s1 { background: rgba(59, 130, 246, 0.25); color: #3b82f6; border-color: rgba(59, 130, 246, 0.5); box-shadow: 0 0 15px rgba(59, 130, 246, 0.1); }
+        .term-btn.active-s2 { background: rgba(139, 92, 246, 0.25); color: #a78bfa; border-color: rgba(139, 92, 246, 0.5); box-shadow: 0 0 15px rgba(139, 92, 246, 0.1); }
+    </style>
+</head>
+
+<body class="p-4 md:p-8">
+    <div id="app" class="max-w-6xl mx-auto">
+        <header class="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-4">
+            <div class="flex items-center gap-4">
+                <div>
+                    <h1 class="text-3xl font-bold tracking-tight">Otago Grade <span class="text-blue-500">Insights</span></h1>
+                    <p class="text-gray-500 text-sm">From Official Data • Visualized for Students</p>
+                </div>
+            </div>
+            <div class="relative w-full md:w-80">
+                <input v-model="searchQuery" @input="handleSearch" placeholder="Search course (e.g. COMPSCI 101)"
+                    class="search-input w-full py-3 px-6 rounded-full text-white">
+                <div v-if="searchResults.length" class="absolute mt-2 w-full glass z-50 max-h-64 overflow-y-auto shadow-2xl">
+                    <div v-for="res in searchResults" :key="res.id" @click="selectCourse(res.id)"
+                        class="px-6 py-3 hover:bg-blue-500/20 cursor-pointer border-b border-white/5 last:border-0 transition-colors">
+                        {{ res.id }}
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <div v-if="currentCourse" class="space-y-6">
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <h2 class="text-4xl font-bold">{{ currentCourse }}</h2>
+                
+                <div class="flex items-center gap-3 w-full md:w-auto">
+                    <div class="flex w-full md:w-auto bg-white/5 p-1 rounded-xl border border-white/10 backdrop-blur-md">
+                        <button v-for="opt in filterOptions" :key="opt.value" 
+                            @click="toggleTerm(opt.value)"
+                            :disabled="isClickLocked"
+                            :class="[
+                                'flex-1 md:flex-none px-4 md:px-5 py-2.5 md:py-2 rounded-lg text-sm md:text-xs font-bold uppercase tracking-wider term-btn border border-transparent disabled:opacity-60 disabled:cursor-not-allowed',
+                                selectedTerms.includes(opt.value) ? opt.activeClass : 'text-gray-500 hover:text-gray-300'
+                            ]">
+                            {{ opt.label }}
+                        </button>
+                    </div>
+                    <button @click="openShareDialog"
+                        :disabled="isClickLocked"
+                        class="px-4 py-2.5 md:py-2 rounded-lg text-xs font-bold uppercase tracking-wider border border-white/20 bg-white/5 hover:bg-white/10 transition-colors disabled:opacity-60 disabled:cursor-not-allowed whitespace-nowrap">
+                        Share View
+                    </button>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <button @click="selectMetric('pass_rate')"
+                    :disabled="isClickLocked"
+                    :style="getMetricCardStyle('pass_rate')"
+                    :class="[
+                        'glass p-6 border-l-4 border-green-500 text-left transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed',
+                        getMetricCardClass('pass_rate')
+                    ]">
+                    <p class="text-xs text-gray-400 uppercase tracking-widest mb-1">Pass Rate</p>
+                    <p class="text-3xl font-bold text-green-400">{{ selectedRecord?.pass_rate }}%</p>
+                </button>
+                <button @click="selectMetric('a_range')"
+                    :disabled="isClickLocked"
+                    :style="getMetricCardStyle('a_range')"
+                    :class="[
+                        'glass p-6 border-l-4 text-left transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed',
+                        getMetricCardClass('a_range'),
+                        getARangeCardBorderClass()
+                    ]">
+                    <p class="text-xs text-gray-400 uppercase tracking-widest mb-1">{{ aCardLabel }}</p>
+                    <p :class="['text-3xl font-bold', getARangeValueClass()]">{{ aCardValue }}%</p>
+                </button>
+                <button @click="selectMetric('risk_rate')"
+                    :disabled="isClickLocked"
+                    :style="getMetricCardStyle('risk_rate')"
+                    :class="[
+                        'glass p-6 border-l-4 border-orange-500 text-left transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed',
+                        getMetricCardClass('risk_rate')
+                    ]">
+                    <p class="text-xs text-gray-400 uppercase tracking-widest mb-1">Risk (Fail/DNC)</p>
+                    <p class="text-3xl font-bold text-orange-400">{{ selectedRecord?.risk_rate }}%</p>
+                </button>
+                <button @click="selectMetric('headcount')"
+                    :disabled="isClickLocked"
+                    :style="getMetricCardStyle('headcount')"
+                    :class="[
+                        'glass p-6 border-l-4 border-gray-500 text-left transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed',
+                        getMetricCardClass('headcount')
+                    ]">
+                    <p class="text-xs text-gray-400 uppercase tracking-widest mb-1">Headcount</p>
+                    <p class="text-3xl font-bold">{{ selectedRecord?.headcount }}</p>
+                </button>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div class="md:col-span-2 glass p-6">
+                    <h3 class="text-sm font-semibold text-gray-400 mb-6 flex flex-col gap-3 md:flex-row md:justify-between md:items-center">
+                        <div class="flex flex-wrap items-center gap-3">
+                            <span>Historical Trend • {{ metricLabel }}</span>
+                            <div v-if="selectedMetric === 'a_range'" class="flex gap-1 p-1 rounded-xl border border-white/15">
+                                <button v-for="opt in aRangeOptions" :key="opt.value"
+                                    @click="selectABand(opt.value)"
+                                    :disabled="isClickLocked"
+                                    :class="[
+                                        'px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider term-btn border disabled:opacity-60 disabled:cursor-not-allowed',
+                                        getRangeOptionClass(opt.value)
+                                    ]">
+                                    {{ opt.label }}
+                                </button>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <button @click="toggleAnomaly"
+                                :disabled="isAnomalyLocked || isClickLocked"
+                                :class="[
+                                    'px-2 py-1 rounded-md text-[10px] uppercase tracking-wider border transition-colors disabled:opacity-60 disabled:cursor-not-allowed',
+                                    anomalyEnabled
+                                        ? 'text-emerald-300 border-emerald-500/50 bg-emerald-500/10'
+                                        : 'text-gray-400 border-white/20 bg-white/5'
+                                ]">
+                                change {{ anomalyEnabled ? 'On' : 'Off' }}
+                            </button>
+                            <button v-if="anomalyEnabled" @click="toggleTrend"
+                                :disabled="isClickLocked"
+                                :class="[
+                                    'px-2 py-1 rounded-md text-[10px] uppercase tracking-wider border transition-colors disabled:opacity-60 disabled:cursor-not-allowed',
+                                    trendEnabled
+                                        ? 'text-white border-white/60 bg-white/10'
+                                        : 'text-gray-400 border-white/20 bg-white/5'
+                                ]">
+                                trend {{ trendEnabled ? 'On' : 'Off' }}
+                            </button>
+                            <span class="text-blue-500 whitespace-nowrap">{{ selectedTerms.length === 3 ? 'All Terms' : selectedTerms.map(t => t === 'Summer' ? 'SS' : (t === 'Semester 1' ? 'S1' : 'S2')).join(', ') }}</span>
+                        </div>
+                    </h3>
+                    <div ref="trendScrollContainer"
+                        :class="[
+                            'h-[250px] relative overflow-y-hidden pb-1 md:overflow-x-hidden',
+                            shouldEnableTrendScroll ? 'overflow-x-auto' : 'overflow-x-hidden'
+                        ]">
+                        <div class="h-full" :style="shouldEnableTrendScroll ? { width: `${trendCanvasWidth}px`, minWidth: '100%' } : { width: '100%' }">
+                            <canvas id="trendChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+                <div class="glass p-6">
+                    <h3 class="text-sm font-semibold mb-6 text-gray-400 text-center">
+                        Grade Bands ({{ selectedRecord?.term }} {{ selectedRecord?.year }})
+                    </h3>
+                    <div class="h-[250px] relative">
+                        <canvas id="bandChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div v-else class="h-96 flex flex-col items-center justify-center text-center">
+            <div class="w-16 h-16 bg-white/5 rounded-2xl flex items-center justify-center mb-6 rotate-12 border border-white/10">
+                <i class="text-blue-500 text-2xl font-black not-italic">Otago</i>
+            </div>
+            <h2 class="text-2xl font-semibold mb-2">Ready to explore?</h2>
+            <p class="text-gray-500 max-w-sm">Search for any course code to see historical performance and grade distributions.</p>
+        </div>
+
+        <div class="mt-8 flex justify-center">
+            <a href="https://info.flagcounter.com/8ZuE" class="block rounded-xl overflow-hidden border border-white/10 shadow-[0_0_20px_rgba(59,130,246,0.08)]">
+                <img src="https://s01.flagcounter.com/count2/8ZuE/bg_05070D/txt_9CA3AF/border_1F2937/columns_6/maxflags_12/viewers_0/labels_0/pageviews_1/flags_0/percent_0/" alt="Flag Counter" border="0" class="block">
+            </a>
+        </div>
+
+        <div v-if="shareDialogOpen" class="fixed inset-0 z-[90] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+            <div class="glass w-full max-w-xl p-5">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-lg font-semibold">Share This View</h3>
+                    <button @click="closeShareDialog" class="text-gray-400 hover:text-white text-sm">Close</button>
+                </div>
+                <p class="text-sm text-gray-400 mb-3">Anyone opening this link will see the same course and filters.</p>
+                <div class="bg-black/40 border border-white/10 rounded-lg p-3 text-xs break-all text-gray-200 mb-4">
+                    {{ shareUrl }}
+                </div>
+                <div class="flex items-center gap-2">
+                    <button @click="copyShareUrl"
+                        class="px-4 py-2 rounded-md text-xs font-bold uppercase tracking-wider border border-blue-500/50 text-blue-300 bg-blue-500/10 hover:bg-blue-500/20">
+                        {{ shareCopied ? 'Copied' : 'Copy Link' }}
+                    </button>
+                    <span class="text-xs text-gray-500">No system share call. URL only.</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+
+        createApp({
+            data() {
+                return {
+                    searchQuery: '',
+                    index: [],
+                    allData: {},
+                    searchResults: [],
+                    currentCourse: null,
+                    selectedRecordIndex: 0,
+                    selectedTermFilter: 'ALL',
+                    selectedTerms: ['Summer', 'Semester 1', 'Semester 2'], // 默认全选
+                    trendChart: null,
+                    bandChart: null,
+                    filterOptions: [
+                        { label: 'SS', value: 'Summer', activeClass: 'active-ss' },
+                        { label: 'S1', value: 'Semester 1', activeClass: 'active-s1' },
+                        { label: 'S2', value: 'Semester 2', activeClass: 'active-s2' }
+                    ],
+                    selectedMetric: 'pass_rate',
+                    selectedABand: 'A',
+                    aRangeOptions: [
+                        { label: 'A', value: 'A' },
+                        { label: 'B', value: 'B' },
+                        { label: 'C', value: 'C' },
+                        { label: 'Fail', value: 'Fail' },
+                        { label: 'W', value: 'W' }
+                    ],
+                    anomalyEnabled: false,
+                    trendEnabled: false,
+                    anomalyThreshold: 8,
+                    isAnomalyLocked: false,
+                    isExporting: false,
+                    isClickLocked: false,
+                    lastClickTime: 0,
+                    isMobile: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent),
+                    interactionTimer: null,
+                    searchDebounceTimer: null,
+                    resizeThrottleTimer: null,
+                    lastResizeRenderAt: 0,
+                    isRendering: false,
+                    isRenderQueued: false,
+                    needsRender: false,
+                    renderErrorRetryCount: 0,
+                    maxRenderErrorRetry: 1,
+                    lowPerfMode: false,
+                    renderPerfHistory: [],
+                    shouldScrollTrendToLatest: false,
+                    shareDialogOpen: false,
+                    shareUrl: '',
+                    shareCopied: false,
+                    debugMetrics: {
+                        blockedInteractions: 0,
+                        renderCount: 0,
+                        lastRenderMs: 0
+                    },
+                    cooldownConfig: {
+                        desktop: {
+                            termToggle: 1000,
+                            metric: 900,
+                            aBand: 900,
+                            change: 1100,
+                            trend: 900,
+                            courseSelect: 1500,
+                            chartPoint: 1000,
+                            default: 1000
+                        },
+                        mobile: {
+                            termToggle: 700,
+                            metric: 620,
+                            aBand: 620,
+                            change: 1050,
+                            trend: 760,
+                            courseSelect: 1250,
+                            chartPoint: 700,
+                            default: 720
+                        }
+                    }
+                }
+            },
+            computed: {
+                filteredRecords() {
+                    if (!this.currentCourse || !this.allData[this.currentCourse]) return [];
+                    const records = this.allData[this.currentCourse];
+                    // 如果没有选中任何学期，返回空数组
+                    if (this.selectedTerms.length === 0) return [];
+                    // 根据选中的学期过滤
+                    return records.filter(r => this.selectedTerms.includes(r.term));
+                },
+                selectedRecord() {
+                    const records = this.filteredRecords;
+                    if (!records.length) return null;
+                    const validIndex = Math.min(Math.max(0, this.selectedRecordIndex), records.length - 1);
+                    return records[validIndex];
+                },
+                trendCanvasWidth() {
+                    const count = Math.max(1, this.filteredRecords.length);
+                    const perBar = this.isMobile ? 24 : 54;
+                    const base = this.isMobile ? 420 : 900;
+                    return Math.max(base, count * perBar);
+                },
+                shouldEnableTrendScroll() {
+                    return this.isMobile && this.filteredRecords.length > 10;
+                },
+                metricLabel() {
+                    if (this.selectedMetric === 'pass_rate') return 'Pass Rate';
+                    if (this.selectedMetric === 'a_range') return `${this.selectedABand} Range`;
+                    if (this.selectedMetric === 'risk_rate') return 'Risk (Fail/DNC)';
+                    return 'Headcount';
+                },
+                aCardLabel() {
+                    if (this.selectedABand === 'Fail') return 'Fail';
+                    if (this.selectedABand === 'W') return 'W';
+                    return `${this.selectedABand} Range`;
+                },
+                aCardValue() {
+                    if (!this.selectedRecord) return '0.0';
+                    if (this.selectedABand === 'A') return Number(this.selectedRecord.a_rate || 0).toFixed(1);
+                    const count = Number(this.selectedRecord.bands?.[this.selectedABand] || 0);
+                    const total = Number(this.selectedRecord.headcount || 0);
+                    const pct = total > 0 ? (count / total) * 100 : 0;
+                    return pct.toFixed(1);
+                },
+                anomalySummaries() {
+                    return [];
+                }
+            },
+            watch: {
+                anomalyEnabled() {
+                    if (!this.currentCourse) return;
+                    this.queueRender('anomaly-watch');
+                }
+            },
+            async mounted() {
+                try {
+                    const [idxRes, dataRes] = await Promise.all([
+                        fetch('search-index.json').then(r => r.json()),
+                        fetch('course-data.json').then(r => r.json())
+                    ]);
+                    this.index = idxRes;
+                    this.allData = dataRes;
+                } catch (e) { 
+                    console.error("Data loading failed", e);
+                }
+                this.applySharedStateFromUrl();
+                if (this.isMobile) {
+                    window.addEventListener('orientationchange', this.handleOrientationChange, { passive: true });
+                } else {
+                    window.addEventListener('resize', this.handleResizeThrottled, { passive: true });
+                }
+            },
+            beforeUnmount() {
+                this.destroyCharts();
+                if (this.interactionTimer) clearTimeout(this.interactionTimer);
+                if (this.searchDebounceTimer) clearTimeout(this.searchDebounceTimer);
+                if (this.resizeThrottleTimer) clearTimeout(this.resizeThrottleTimer);
+                window.removeEventListener('resize', this.handleResizeThrottled);
+                window.removeEventListener('orientationchange', this.handleOrientationChange);
+            },
+            methods: {
+                getCooldownMs(action) {
+                    const profile = this.isMobile ? this.cooldownConfig.mobile : this.cooldownConfig.desktop;
+                    return profile[action] || profile.default;
+                },
+                toTermCode(term) {
+                    if (term === 'Summer') return 'SS';
+                    if (term === 'Semester 1') return 'S1';
+                    if (term === 'Semester 2') return 'S2';
+                    return '';
+                },
+                fromTermCode(code) {
+                    if (code === 'SS') return 'Summer';
+                    if (code === 'S1') return 'Semester 1';
+                    if (code === 'S2') return 'Semester 2';
+                    return null;
+                },
+                buildShareUrl() {
+                    if (!this.currentCourse) return window.location.href;
+                    const params = new URLSearchParams();
+                    params.set('course', this.currentCourse);
+                    params.set('terms', this.selectedTerms.map(t => this.toTermCode(t)).filter(Boolean).join(','));
+                    params.set('metric', this.selectedMetric);
+                    params.set('band', this.selectedABand);
+                    params.set('change', this.anomalyEnabled ? '1' : '0');
+                    params.set('trend', this.trendEnabled ? '1' : '0');
+                    params.set('idx', String(this.selectedRecordIndex));
+                    return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+                },
+                openShareDialog() {
+                    this.shareCopied = false;
+                    this.shareUrl = this.buildShareUrl();
+                    this.shareDialogOpen = true;
+                },
+                closeShareDialog() {
+                    this.shareDialogOpen = false;
+                },
+                async copyShareUrl() {
+                    if (!this.shareUrl) return;
+                    try {
+                        await navigator.clipboard.writeText(this.shareUrl);
+                        this.shareCopied = true;
+                        return;
+                    } catch (_) {
+                        const textarea = document.createElement('textarea');
+                        textarea.value = this.shareUrl;
+                        textarea.style.position = 'fixed';
+                        textarea.style.opacity = '0';
+                        document.body.appendChild(textarea);
+                        textarea.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(textarea);
+                        this.shareCopied = true;
+                    }
+                },
+                applySharedStateFromUrl() {
+                    const params = new URLSearchParams(window.location.search);
+                    const course = params.get('course');
+                    if (!course || !this.allData[course]) return;
+
+                    this.currentCourse = course;
+                    this.searchResults = [];
+                    this.searchQuery = '';
+
+                    const termStr = params.get('terms') || '';
+                    const parsedTerms = termStr
+                        .split(',')
+                        .map(code => this.fromTermCode(code))
+                        .filter(Boolean);
+                    this.selectedTerms = parsedTerms.length ? parsedTerms : ['Summer', 'Semester 1', 'Semester 2'];
+
+                    const metric = params.get('metric');
+                    const allowedMetrics = ['pass_rate', 'a_range', 'risk_rate', 'headcount'];
+                    this.selectedMetric = allowedMetrics.includes(metric) ? metric : 'pass_rate';
+
+                    const band = params.get('band');
+                    const allowedBands = ['A', 'B', 'C', 'Fail', 'W'];
+                    this.selectedABand = allowedBands.includes(band) ? band : 'A';
+
+                    this.anomalyEnabled = params.get('change') === '1';
+                    this.trendEnabled = this.anomalyEnabled && params.get('trend') === '1';
+
+                    const termOrder = { 'Summer': 0, 'Semester 1': 1, 'Semester 2': 2 };
+                    this.allData[course].sort((a, b) => {
+                        if (a.year !== b.year) return a.year - b.year;
+                        return (termOrder[a.term] ?? 9) - (termOrder[b.term] ?? 9);
+                    });
+
+                    const idx = Number(params.get('idx'));
+                    const maxIdx = Math.max(0, this.allData[course].length - 1);
+                    this.selectedRecordIndex = Number.isFinite(idx) ? Math.min(Math.max(0, idx), maxIdx) : maxIdx;
+
+                    this.shouldScrollTrendToLatest = this.shouldEnableTrendScroll;
+                    this.queueRender('shared-url');
+                },
+                beginInteraction(action, overrideMs = null) {
+                    if (this.isClickLocked) {
+                        this.debugMetrics.blockedInteractions += 1;
+                        return false;
+                    }
+                    this.isClickLocked = true;
+                    this.lastClickTime = Date.now();
+                    if (this.interactionTimer) clearTimeout(this.interactionTimer);
+                    const cooldown = overrideMs ?? this.getCooldownMs(action);
+                    this.interactionTimer = setTimeout(() => {
+                        this.isClickLocked = false;
+                    }, cooldown);
+                    return true;
+                },
+                queueRender(reason = 'unknown') {
+                    if (!this.currentCourse) return;
+                    this.needsRender = true;
+                    if (this.isRenderQueued) return;
+                    this.isRenderQueued = true;
+                    Promise.resolve().then(() => this.flushRenderQueue(reason));
+                },
+                flushRenderQueue(reason = 'unknown') {
+                    if (this.isRendering) {
+                        this.isRenderQueued = false;
+                        return;
+                    }
+                    if (!this.needsRender) {
+                        this.isRenderQueued = false;
+                        return;
+                    }
+                    this.isRendering = true;
+                    this.isRenderQueued = false;
+                    this.needsRender = false;
+                    const renderStart = performance.now();
+                    try {
+                        this.destroyCharts();
+                        this.$nextTick(() => {
+                            try {
+                                this.initTrendChart();
+                                this.updateBandChart();
+                                this.renderErrorRetryCount = 0;
+                            } catch (err) {
+                                console.error('Chart render failed:', err);
+                                if (this.renderErrorRetryCount < this.maxRenderErrorRetry) {
+                                    this.renderErrorRetryCount += 1;
+                                    this.needsRender = true;
+                                }
+                            } finally {
+                                if (this.shouldScrollTrendToLatest && this.shouldEnableTrendScroll) {
+                                    this.$nextTick(() => this.scrollTrendToLatest());
+                                    this.shouldScrollTrendToLatest = false;
+                                }
+                                const renderMs = performance.now() - renderStart;
+                                this.debugMetrics.renderCount += 1;
+                                this.debugMetrics.lastRenderMs = Number(renderMs.toFixed(1));
+                                this.renderPerfHistory.push(renderMs);
+                                if (this.renderPerfHistory.length > 12) this.renderPerfHistory.shift();
+                                const avg = this.renderPerfHistory.reduce((s, v) => s + v, 0) / this.renderPerfHistory.length;
+                                this.lowPerfMode = this.isMobile && avg > 220;
+                                this.isRendering = false;
+                                if (this.needsRender) {
+                                    this.queueRender(`follow-up:${reason}`);
+                                }
+                            }
+                        });
+                    } catch (err) {
+                        console.error('Render pipeline failure:', err);
+                        this.isRendering = false;
+                    }
+                },
+                handleResizeThrottled() {
+                    if (!this.currentCourse) return;
+                    if (this.isMobile) return;
+                    const now = Date.now();
+                    const minGap = this.isMobile ? 260 : 180;
+                    if (now - this.lastResizeRenderAt < minGap) {
+                        if (this.resizeThrottleTimer) clearTimeout(this.resizeThrottleTimer);
+                        this.resizeThrottleTimer = setTimeout(() => {
+                            this.lastResizeRenderAt = Date.now();
+                            this.queueRender('resize');
+                        }, minGap);
+                        return;
+                    }
+                    this.lastResizeRenderAt = now;
+                    this.queueRender('resize');
+                },
+                handleOrientationChange() {
+                    if (!this.currentCourse) return;
+                    if (this.resizeThrottleTimer) clearTimeout(this.resizeThrottleTimer);
+                    this.resizeThrottleTimer = setTimeout(() => {
+                        this.queueRender('orientation-change');
+                    }, 280);
+                },
+                safeDestroyChart(chartRefName) {
+                    const chart = this[chartRefName];
+                    if (!chart) return;
+                    try {
+                        chart.destroy();
+                    } catch (e) {
+                        console.error(`Error destroying ${chartRefName}:`, e);
+                    } finally {
+                        this[chartRefName] = null;
+                    }
+                },
+                destroyCharts() {
+                    this.safeDestroyChart('trendChart');
+                    this.safeDestroyChart('bandChart');
+                },
+                toggleTerm(termValue) {
+                    if (!this.beginInteraction('termToggle')) return;
+                    const index = this.selectedTerms.indexOf(termValue);
+                    if (index > -1) {
+                        this.selectedTerms.splice(index, 1);
+                    } else {
+                        this.selectedTerms.push(termValue);
+                    }
+                    this.selectedRecordIndex = Math.max(0, this.filteredRecords.length - 1);
+                    this.queueRender('term-toggle');
+                },
+                selectMetric(metric) {
+                    if (this.selectedMetric === metric) return;
+                    if (!this.beginInteraction('metric')) return;
+                    this.selectedMetric = metric;
+                    this.queueRender('metric');
+                },
+                selectABand(band) {
+                    if (this.selectedABand === band) return;
+                    if (!this.beginInteraction('aBand')) return;
+                    this.selectedABand = band;
+                    this.queueRender('a-band');
+                },
+                getRangeOptionClass(band) {
+                    const activeStyles = {
+                        A: 'text-blue-300 border-blue-500/60 bg-blue-500/20 shadow-[0_0_14px_rgba(59,130,246,0.2)]',
+                        B: 'text-violet-300 border-violet-500/60 bg-violet-500/20 shadow-[0_0_14px_rgba(139,92,246,0.2)]',
+                        C: 'text-cyan-300 border-cyan-500/60 bg-cyan-500/20 shadow-[0_0_14px_rgba(6,182,212,0.2)]',
+                        Fail: 'text-orange-300 border-orange-500/60 bg-orange-500/20 shadow-[0_0_14px_rgba(249,115,22,0.2)]',
+                        W: 'text-slate-300 border-slate-500/60 bg-slate-500/20 shadow-[0_0_14px_rgba(75,85,99,0.2)]'
+                    };
+                    if (this.selectedABand === band) return activeStyles[band] || activeStyles.A;
+                    return 'text-gray-500 border-transparent hover:text-gray-300 hover:border-white/20';
+                },
+                getARangeTheme() {
+                    const themes = {
+                        A: {
+                            border: 'border-blue-500',
+                            value: 'text-blue-400',
+                            activeBorder: 'border-blue-500/75',
+                            glow: {
+                                backgroundColor: 'rgba(59, 130, 246, 0.14)',
+                                boxShadow: 'inset 0 0 0 1px rgba(96, 165, 250, 0.52), 0 0 28px rgba(59, 130, 246, 0.28), 0 0 56px rgba(59, 130, 246, 0.12)'
+                            }
+                        },
+                        B: {
+                            border: 'border-violet-500',
+                            value: 'text-violet-400',
+                            activeBorder: 'border-violet-500/75',
+                            glow: {
+                                backgroundColor: 'rgba(139, 92, 246, 0.14)',
+                                boxShadow: 'inset 0 0 0 1px rgba(167, 139, 250, 0.52), 0 0 28px rgba(139, 92, 246, 0.28), 0 0 56px rgba(139, 92, 246, 0.12)'
+                            }
+                        },
+                        C: {
+                            border: 'border-cyan-500',
+                            value: 'text-cyan-400',
+                            activeBorder: 'border-cyan-500/75',
+                            glow: {
+                                backgroundColor: 'rgba(6, 182, 212, 0.14)',
+                                boxShadow: 'inset 0 0 0 1px rgba(34, 211, 238, 0.52), 0 0 28px rgba(6, 182, 212, 0.28), 0 0 56px rgba(6, 182, 212, 0.12)'
+                            }
+                        },
+                        Fail: {
+                            border: 'border-orange-500',
+                            value: 'text-orange-400',
+                            activeBorder: 'border-orange-500/75',
+                            glow: {
+                                backgroundColor: 'rgba(249, 115, 22, 0.14)',
+                                boxShadow: 'inset 0 0 0 1px rgba(251, 146, 60, 0.52), 0 0 28px rgba(249, 115, 22, 0.28), 0 0 56px rgba(249, 115, 22, 0.12)'
+                            }
+                        },
+                        W: {
+                            border: 'border-slate-500',
+                            value: 'text-slate-300',
+                            activeBorder: 'border-slate-500/75',
+                            glow: {
+                                backgroundColor: 'rgba(100, 116, 139, 0.14)',
+                                boxShadow: 'inset 0 0 0 1px rgba(148, 163, 184, 0.5), 0 0 28px rgba(100, 116, 139, 0.24), 0 0 56px rgba(100, 116, 139, 0.12)'
+                            }
+                        }
+                    };
+                    return themes[this.selectedABand] || themes.A;
+                },
+                getARangeCardBorderClass() {
+                    return this.getARangeTheme().border;
+                },
+                getARangeValueClass() {
+                    return this.getARangeTheme().value;
+                },
+                getMetricCardClass(metric) {
+                    const activeStyles = {
+                        pass_rate: 'border-emerald-500/75',
+                        a_range: this.getARangeTheme().activeBorder,
+                        risk_rate: 'border-orange-500/75',
+                        headcount: 'border-white/55'
+                    };
+                    if (this.selectedMetric === metric) return activeStyles[metric] || activeStyles.pass_rate;
+                    return 'hover:bg-white/5 border-white/10';
+                },
+                getMetricCardStyle(metric) {
+                    if (this.selectedMetric !== metric) return {};
+                    const glow = {
+                        pass_rate: {
+                            backgroundColor: 'rgba(16, 185, 129, 0.14)',
+                            boxShadow: 'inset 0 0 0 1px rgba(52, 211, 153, 0.5), 0 0 28px rgba(16, 185, 129, 0.28), 0 0 56px rgba(16, 185, 129, 0.12)'
+                        },
+                        a_range: this.getARangeTheme().glow,
+                        risk_rate: {
+                            backgroundColor: 'rgba(249, 115, 22, 0.14)',
+                            boxShadow: 'inset 0 0 0 1px rgba(251, 146, 60, 0.52), 0 0 28px rgba(249, 115, 22, 0.28), 0 0 56px rgba(249, 115, 22, 0.12)'
+                        },
+                        headcount: {
+                            backgroundColor: 'rgba(255, 255, 255, 0.12)',
+                            boxShadow: 'inset 0 0 0 1px rgba(229, 231, 235, 0.52), 0 0 28px rgba(229, 231, 235, 0.2), 0 0 56px rgba(229, 231, 235, 0.1)'
+                        }
+                    };
+                    return glow[metric] || {};
+                },
+                toggleAnomaly() {
+                    if (this.isAnomalyLocked) return;
+                    if (!this.beginInteraction('change')) return;
+                    this.isAnomalyLocked = true;
+                    this.anomalyEnabled = !this.anomalyEnabled;
+                    if (!this.anomalyEnabled) {
+                        this.trendEnabled = false;
+                    }
+                    this.queueRender('change');
+                    setTimeout(() => {
+                        this.isAnomalyLocked = false;
+                    }, this.getCooldownMs('change'));
+                },
+                toggleTrend() {
+                    if (!this.anomalyEnabled) return;
+                    if (!this.beginInteraction('trend')) return;
+                    this.trendEnabled = !this.trendEnabled;
+                    this.queueRender('trend');
+                },
+                normalizeCourseText(value) {
+                    return String(value || '')
+                        .toUpperCase()
+                        .replace(/[^A-Z0-9]/g, '');
+                },
+                expandAlias(normalizedQuery) {
+                    const aliasRules = [
+                        { from: /^CS(\d+)$/, to: 'COMPSCI$1' },
+                        { from: /^COMSCI(\d+)$/, to: 'COMPSCI$1' },
+                        { from: /^COMPSCIENCE(\d+)$/, to: 'COMPSCI$1' }
+                    ];
+                    for (const rule of aliasRules) {
+                        if (rule.from.test(normalizedQuery)) {
+                            return normalizedQuery.replace(rule.from, rule.to);
+                        }
+                    }
+                    return normalizedQuery;
+                },
+                handleSearch() {
+                    if (this.searchDebounceTimer) clearTimeout(this.searchDebounceTimer);
+                    this.searchDebounceTimer = setTimeout(() => this.runSearch(), this.isMobile ? 180 : 120);
+                },
+                runSearch() {
+                    const rawQuery = this.searchQuery.trim();
+                    if (!rawQuery) return this.searchResults = [];
+
+                    const lowerQuery = rawQuery.toLowerCase();
+                    const normalizedQuery = this.normalizeCourseText(rawQuery);
+                    const expandedQuery = this.expandAlias(normalizedQuery);
+
+                    const scored = this.index.map((item) => {
+                        const id = item.id || '';
+                        const lowerId = id.toLowerCase();
+                        const normalizedId = this.normalizeCourseText(id);
+                        let score = 0;
+
+                        if (lowerId === lowerQuery) score += 120;
+                        if (lowerId.includes(lowerQuery)) score += 90;
+                        if (normalizedQuery && normalizedId.includes(normalizedQuery)) score += 80;
+                        if (expandedQuery && expandedQuery !== normalizedQuery && normalizedId.includes(expandedQuery)) score += 70;
+                        if (normalizedQuery && normalizedId.startsWith(normalizedQuery)) score += 20;
+                        if (expandedQuery && normalizedId.startsWith(expandedQuery)) score += 15;
+
+                        return { item, score };
+                    });
+
+                    this.searchResults = scored
+                        .filter((entry) => entry.score > 0)
+                        .sort((a, b) => b.score - a.score || a.item.id.localeCompare(b.item.id))
+                        .slice(0, 8)
+                        .map((entry) => entry.item);
+                },
+                selectCourse(id) {
+                    if (!this.beginInteraction('courseSelect')) return;
+                    this.currentCourse = id;
+                    this.searchResults = [];
+                    this.searchQuery = '';
+                    this.selectedTerms = ['Summer', 'Semester 1', 'Semester 2']; // 重置为全选
+
+                    const termOrder = { 'Summer': 0, 'Semester 1': 1, 'Semester 2': 2 };
+                    this.allData[id].sort((a, b) => {
+                        if (a.year !== b.year) return a.year - b.year;
+                        return (termOrder[a.term] ?? 9) - (termOrder[b.term] ?? 9);
+                    });
+
+                    this.selectedRecordIndex = this.allData[id].length - 1;
+                    this.shouldScrollTrendToLatest = true;
+                    this.queueRender('course-select');
+                },
+                scrollTrendToLatest() {
+                    const el = this.$refs.trendScrollContainer;
+                    if (!el) return;
+                    el.scrollLeft = el.scrollWidth;
+                },
+                getTermColor(term) {
+                    const colors = { 'Summer': '#F59E0B', 'Semester 1': '#3B82F6', 'Semester 2': '#8B5CF6' };
+                    return colors[term] || '#888';
+                },
+                renderCharts() {
+                    this.queueRender('legacy-call');
+                },
+                exportReportImage() {
+                    if (!this.currentCourse || !this.selectedRecord) return;
+                    const trendCanvas = document.getElementById('trendChart');
+                    const bandCanvas = document.getElementById('bandChart');
+                    if (!trendCanvas || !bandCanvas) return;
+
+                    this.isExporting = true;
+                    const reportCanvas = document.createElement('canvas');
+                    reportCanvas.width = 2200;
+                    reportCanvas.height = 1220;
+                    const ctx = reportCanvas.getContext('2d');
+
+                    const drawRoundedRect = (x, y, w, h, r, fillStyle, strokeStyle) => {
+                        ctx.beginPath();
+                        ctx.moveTo(x + r, y);
+                        ctx.lineTo(x + w - r, y);
+                        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+                        ctx.lineTo(x + w, y + h - r);
+                        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+                        ctx.lineTo(x + r, y + h);
+                        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+                        ctx.lineTo(x, y + r);
+                        ctx.quadraticCurveTo(x, y, x + r, y);
+                        ctx.closePath();
+                        ctx.fillStyle = fillStyle;
+                        ctx.fill();
+                        if (strokeStyle) {
+                            ctx.strokeStyle = strokeStyle;
+                            ctx.lineWidth = 2;
+                            ctx.stroke();
+                        }
+                    };
+
+                    const termShortMap = { 'Summer': 'SS', 'Semester 1': 'S1', 'Semester 2': 'S2' };
+                    const termSummary = this.selectedTerms.length === 3
+                        ? 'All Terms'
+                        : this.selectedTerms.map(t => termShortMap[t] || t).join(', ');
+                    const record = this.selectedRecord;
+                    const trendRecords = this.filteredRecords || [];
+                    const headcount = Number(record.headcount || 0);
+                    const bandPairs = [
+                        { label: 'A Range', value: Number(record.bands?.A || 0) },
+                        { label: 'B Range', value: Number(record.bands?.B || 0) },
+                        { label: 'C Range', value: Number(record.bands?.C || 0) },
+                        { label: 'Fail', value: Number(record.bands?.Fail || 0) },
+                        { label: 'W', value: Number(record.bands?.W || 0) }
+                    ];
+                    const trendEntries = trendRecords.map((r) => {
+                        const shortTerm = r.term === 'Summer' ? 'SS' : (r.term === 'Semester 1' ? 'S1' : 'S2');
+                        return {
+                            term: `${r.year}${shortTerm}`,
+                            rate: `${Number(r.pass_rate || 0).toFixed(1)}%`
+                        };
+                    });
+
+                    ctx.fillStyle = '#000000';
+                    ctx.fillRect(0, 0, reportCanvas.width, reportCanvas.height);
+
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = 'bold 58px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+                    ctx.fillText(this.currentCourse, 70, 90);
+                    ctx.fillStyle = '#9ca3af';
+                    ctx.font = '28px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+                    ctx.fillText(`UoA Grade Insights Report`, 70, 130);
+                    ctx.fillText(`View: ${termSummary} | Generated: ${new Date().toLocaleString()}`, 70, 168);
+
+                    const kpis = [
+                        { label: 'PASS RATE', value: `${record.pass_rate}%`, color: '#4ade80' },
+                        { label: 'A RANGE', value: `${record.a_rate}%`, color: '#60a5fa' },
+                        { label: 'RISK (FAIL/DNC)', value: `${record.risk_rate}%`, color: '#fb923c' },
+                        { label: 'HEADCOUNT', value: `${record.headcount}`, color: '#d1d5db' }
+                    ];
+
+                    const cardY = 210;
+                    const cardW = 500;
+                    const gap = 24;
+                    kpis.forEach((kpi, idx) => {
+                        const x = 70 + idx * (cardW + gap);
+                        drawRoundedRect(x, cardY, cardW, 150, 20, 'rgba(255,255,255,0.04)', 'rgba(255,255,255,0.16)');
+                        ctx.fillStyle = '#9ca3af';
+                        ctx.font = '22px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+                        ctx.fillText(kpi.label, x + 28, cardY + 52);
+                        ctx.fillStyle = kpi.color;
+                        ctx.font = 'bold 60px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+                        ctx.fillText(kpi.value, x + 28, cardY + 120);
+                    });
+
+                    const trendPanel = { x: 70, y: 390, w: 1420, h: 780 };
+                    const bandPanel = { x: 1520, y: 390, w: 610, h: 780 };
+                    drawRoundedRect(trendPanel.x, trendPanel.y, trendPanel.w, trendPanel.h, 24, 'rgba(255,255,255,0.03)', 'rgba(255,255,255,0.14)');
+                    drawRoundedRect(bandPanel.x, bandPanel.y, bandPanel.w, bandPanel.h, 24, 'rgba(255,255,255,0.03)', 'rgba(255,255,255,0.14)');
+
+                    ctx.fillStyle = '#9ca3af';
+                    ctx.font = 'bold 34px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+                    ctx.fillText('Historical Trend', trendPanel.x + 40, trendPanel.y + 55);
+                    ctx.fillText(`Grade Bands (${record.term} ${record.year})`, bandPanel.x + 30, bandPanel.y + 55);
+
+                    ctx.drawImage(trendCanvas, trendPanel.x + 30, trendPanel.y + 78, trendPanel.w - 60, 420);
+                    ctx.drawImage(bandCanvas, bandPanel.x + 24, bandPanel.y + 78, bandPanel.w - 48, 420);
+
+                    ctx.fillStyle = '#d1d5db';
+                    ctx.font = 'bold 22px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+                    ctx.fillText('Pass Rate Timeline', trendPanel.x + 32, trendPanel.y + 540);
+                    ctx.fillText('Grade Bands Detail', bandPanel.x + 28, bandPanel.y + 540);
+
+                    const timelineLeft = trendPanel.x + 32;
+                    const timelineRight = trendPanel.x + trendPanel.w - 32;
+                    let cursorX = timelineLeft;
+                    let cursorY = trendPanel.y + 574;
+                    const rowGap = 30;
+                    trendEntries.forEach((entry) => {
+                        const termText = `${entry.term}: `;
+                        const rateText = entry.rate;
+                        ctx.font = '17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+                        const termW = ctx.measureText(termText).width;
+                        ctx.font = 'bold 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+                        const rateW = ctx.measureText(rateText).width;
+                        const dividerW = ctx.measureText('   |   ').width;
+                        const totalW = termW + rateW + dividerW;
+                        if (cursorX + totalW > timelineRight) {
+                            cursorX = timelineLeft;
+                            cursorY += rowGap;
+                        }
+                        ctx.fillStyle = '#9ca3af';
+                        ctx.font = '17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+                        ctx.fillText(termText, cursorX, cursorY);
+                        cursorX += termW;
+                        ctx.fillStyle = '#ffffff';
+                        ctx.font = 'bold 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+                        ctx.fillText(rateText, cursorX, cursorY);
+                        cursorX += rateW;
+                        ctx.fillStyle = '#4b5563';
+                        ctx.font = '16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+                        ctx.fillText('   |   ', cursorX, cursorY);
+                        cursorX += dividerW;
+                    });
+
+                    ctx.fillStyle = '#9ca3af';
+                    ctx.font = '18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+                    const rightStartX = bandPanel.x + 28;
+                    const rightStartY = bandPanel.y + 575;
+                    bandPairs.forEach((band, idx) => {
+                        const pct = headcount > 0 ? (band.value / headcount) * 100 : 0;
+                        const line = `${band.label}: ${band.value} (${pct.toFixed(1)}%)`;
+                        ctx.fillText(line, rightStartX, rightStartY + idx * 40);
+                    });
+
+                    const termSafe = String(record.term || 'term').replace(/\s+/g, '-');
+                    const filename = `${this.currentCourse}-${record.year}-${termSafe}-report.png`;
+                    reportCanvas.toBlob((blob) => {
+                        if (!blob) {
+                            this.isExporting = false;
+                            return;
+                        }
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = filename;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        this.isExporting = false;
+                    }, 'image/png');
+                },
+                initTrendChart() {
+                    const canvas = document.getElementById('trendChart');
+                    if (!canvas) return;
+
+                    const records = this.filteredRecords;
+                    if (!records.length) return;
+
+                    const ctx = canvas.getContext('2d');
+                    const self = this;
+                    this.safeDestroyChart('trendChart');
+                    const metricValues = records.map((record) => {
+                        if (this.selectedMetric === 'headcount') return Number(record.headcount || 0);
+                        if (this.selectedMetric === 'risk_rate') return Number(record.risk_rate || 0);
+                        if (this.selectedMetric === 'a_range') {
+                            const bandCount = Number(record.bands?.[this.selectedABand] || 0);
+                            const total = Number(record.headcount || 0);
+                            return total > 0 ? (bandCount / total) * 100 : 0;
+                        }
+                        return Number(record.pass_rate || 0);
+                    });
+                    const maxMetricValue = Math.max(...metricValues, 0);
+                    const trendlineValues = (() => {
+                        const n = metricValues.length;
+                        if (n <= 1) return metricValues.map((v) => Number(v || 0));
+                        const xMean = (n - 1) / 2;
+                        const yMean = metricValues.reduce((sum, v) => sum + Number(v || 0), 0) / n;
+                        let sxx = 0;
+                        let sxy = 0;
+                        for (let i = 0; i < n; i++) {
+                            const x = i - xMean;
+                            const y = Number(metricValues[i] || 0) - yMean;
+                            sxx += x * x;
+                            sxy += x * y;
+                        }
+                        const slope = sxx === 0 ? 0 : sxy / sxx;
+                        const intercept = yMean - slope * xMean;
+                        return metricValues.map((_, i) => Number((intercept + slope * i).toFixed(2)));
+                    })();
+                    let yMax = 100;
+                    let tickStep = 10;
+                    if (this.selectedMetric === 'headcount') {
+                        const padded = maxMetricValue * 1.08;
+                        const niceCountCaps = [100, 150, 200, 300, 400, 500, 600, 800, 1000, 1200, 1500, 2000];
+                        yMax = niceCountCaps.find((cap) => padded <= cap) || Math.ceil(padded / 500) * 500;
+                        if (yMax <= 150) tickStep = 20;
+                        else if (yMax <= 300) tickStep = 50;
+                        else if (yMax <= 600) tickStep = 100;
+                        else if (yMax <= 1200) tickStep = 200;
+                        else tickStep = 500;
+                    } else if (this.selectedMetric !== 'pass_rate') {
+                        // Use readable percentage caps instead of odd values like 35%.
+                        const padded = maxMetricValue * 1.15;
+                        const niceCaps = [20, 30, 40, 50, 60, 80, 100];
+                        yMax = niceCaps.find((cap) => padded <= cap) || 100;
+                        if (yMax <= 30) tickStep = 5;
+                        else if (yMax <= 60) tickStep = 10;
+                        else tickStep = 20;
+                    }
+                    const anomalyByIndex = {};
+                    if (this.anomalyEnabled) {
+                        for (let i = 1; i < records.length; i++) {
+                            const prev = Number(metricValues[i - 1] || 0);
+                            const current = Number(metricValues[i] || 0);
+                            const diff = current - prev;
+                            anomalyByIndex[i] = diff;
+                        }
+                    }
+                    const overlayData = records.map((_, idx) => {
+                        if (!this.anomalyEnabled) return null;
+                        return idx in anomalyByIndex ? metricValues[idx] : null;
+                    });
+                    const mobileCompactMode = this.isMobile && this.shouldEnableTrendScroll;
+                    const categoryPercentage = this.isMobile ? (mobileCompactMode ? 1.0 : 0.72) : null;
+                    const barPercentage = this.isMobile ? (mobileCompactMode ? 1.0 : 0.9) : null;
+                    const baseDatasets = [
+                        {
+                            type: 'bar',
+                            data: metricValues,
+                            backgroundColor: records.map(r => this.getTermColor(r.term)),
+                            borderRadius: 6,
+                            borderWidth: 0,
+                            ...(this.isMobile
+                                ? {
+                                    ...(mobileCompactMode ? { maxBarThickness: 16 } : {}),
+                                    ...(categoryPercentage != null ? { categoryPercentage } : {}),
+                                    ...(barPercentage != null ? { barPercentage } : {})
+                                }
+                                : {}),
+                            hoverBorderWidth: 2,
+                            hoverBorderColor: records.map((_, idx) => {
+                                if (this.anomalyEnabled && (idx in anomalyByIndex)) {
+                                    return anomalyByIndex[idx] >= 0 ? '#22c55e' : '#ef4444';
+                                }
+                                return '#ffffff';
+                            })
+                        },
+                        {
+                            data: overlayData,
+                            grouped: false,
+                            order: 10,
+                            borderWidth: 0,
+                            borderRadius: 6,
+                            ...(this.isMobile
+                                ? {
+                                    ...(mobileCompactMode ? { maxBarThickness: 16 } : {}),
+                                    ...(categoryPercentage != null ? { categoryPercentage } : {}),
+                                    ...(barPercentage != null ? { barPercentage } : {})
+                                }
+                                : {}),
+                            backgroundColor: records.map((_, idx) => {
+                                if (!(idx in anomalyByIndex)) return 'rgba(0,0,0,0)';
+                                return anomalyByIndex[idx] > 0
+                                    ? 'rgba(220,252,231,0.22)'
+                                    : 'rgba(254,226,226,0.24)';
+                            })
+                        },
+                        ...(this.anomalyEnabled && this.trendEnabled ? [{
+                            type: 'line',
+                            label: 'Trend',
+                            data: trendlineValues,
+                            borderColor: 'rgba(255,255,255,0.95)',
+                            backgroundColor: 'rgba(255,255,255,0.2)',
+                            borderDash: [6, 4],
+                            pointRadius: 0,
+                            pointHoverRadius: 0,
+                            borderWidth: 2.2,
+                            tension: 0.15,
+                            order: -10,
+                            yAxisID: 'y'
+                        }] : [])
+                    ];
+                    
+                    this.trendChart = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: records.map(r => `${r.year} ${r.term === 'Summer' ? 'SS' : (r.term === 'Semester 1' ? 'S1' : 'S2')}`),
+                            datasets: baseDatasets
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            animation: this.isMobile
+                                ? (this.lowPerfMode ? false : { duration: 180 })
+                                : { duration: 1000 },
+                            onClick: function(e, elements) {
+                                if (elements.length > 0) {
+                                    if (!self.beginInteraction('chartPoint')) return;
+                                    const clickedIndex = elements[0].index;
+                                    self.selectedRecordIndex = clickedIndex;
+                                    self.updateBandChart();
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    min: 0,
+                                    max: yMax,
+                                    grid: { color: 'rgba(255,255,255,0.05)' },
+                                    ticks: {
+                                        color: '#666',
+                                        stepSize: tickStep,
+                                        callback: (value) => this.selectedMetric === 'headcount' ? value : `${value}%`
+                                    }
+                                },
+                                x: {
+                                    grid: { display: false },
+                                    ticks: this.isMobile
+                                        ? {
+                                            autoSkip: false,
+                                            maxRotation: 45,
+                                            minRotation: 45,
+                                            color: '#888',
+                                            font: { size: 10 }
+                                        }
+                                        : {
+                                            color: '#888',
+                                            font: { size: 10 }
+                                        }
+                                }
+                            },
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: {
+                                    displayColors: false,
+                                    filter: (tooltipItem) => tooltipItem.datasetIndex === 0,
+                                    callbacks: {
+                                        title: (items) => {
+                                            if (!items || !items.length) return '';
+                                            return items[0].label || '';
+                                        },
+                                        label: (context) => {
+                                            const val = Number(context.raw || 0);
+                                            if (this.selectedMetric === 'headcount') return `Headcount: ${Math.round(val)}`;
+                                            if (this.selectedMetric === 'a_range') return `${this.selectedABand} Range: ${val.toFixed(1)}%`;
+                                            if (this.selectedMetric === 'risk_rate') return `Risk: ${val.toFixed(1)}%`;
+                                            return `Pass Rate: ${val.toFixed(1)}%`;
+                                        },
+                                        afterLabel: (context) => {
+                                            const idx = context.dataIndex;
+                                            if (!(idx in anomalyByIndex)) return '';
+                                            const diff = anomalyByIndex[idx];
+                                            if (this.selectedMetric === 'headcount') {
+                                                return `Δ vs left: ${diff > 0 ? '+' : ''}${Math.round(diff)}`;
+                                            }
+                                            return `Δ vs left: ${diff > 0 ? '+' : ''}${diff.toFixed(1)}%`;
+                                        },
+                                        labelTextColor: (context) => {
+                                            const idx = context.dataIndex;
+                                            if (!(idx in anomalyByIndex)) return '#ffffff';
+                                            return anomalyByIndex[idx] >= 0 ? '#22c55e' : '#ef4444';
+                                        }
+                                    },
+                                    titleColor: (context) => {
+                                        const title = context?.tooltip?.title?.[0] || '';
+                                        if (title.includes('SS')) return '#f59e0b';
+                                        if (title.includes('S1')) return '#3b82f6';
+                                        if (title.includes('S2')) return '#a78bfa';
+                                        return '#ffffff';
+                                    },
+                                    titleFont: {
+                                        size: 13,
+                                        weight: '700'
+                                    }
+                                }
+                            }
+                        }
+                    });
+                },
+                updateBandChart() {
+                    const canvas = document.getElementById('bandChart');
+                    if (!canvas || !this.selectedRecord) return;
+
+                    this.safeDestroyChart('bandChart');
+
+                    const bands = this.selectedRecord.bands;
+                    const headcount = Number(this.selectedRecord.headcount || 0);
+                    const ctx = canvas.getContext('2d');
+
+                    // 创建新的band chart
+                    this.bandChart = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: ['A Range', 'B Range', 'C Range', 'Fail', 'W'],
+                            datasets: [{
+                                data: [bands.A, bands.B, bands.C, bands.Fail, bands.W],
+                                backgroundColor: ['#3b82f6', '#8b5cf6', '#06b6d4', '#f97316', '#4b5563'],
+                                borderRadius: 8
+                            }]
+                        },
+                        options: {
+                            indexAxis: 'y',
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            animation: this.isMobile
+                                ? (this.lowPerfMode ? false : { duration: 160 })
+                                : { duration: 1000 },
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: {
+                                    callbacks: {
+                                        label: (context) => {
+                                            const label = context.label || '';
+                                            const value = Number(context.raw || 0);
+                                            const percent = headcount > 0 ? (value / headcount) * 100 : 0;
+                                            return `${label}: ${value} (${percent.toFixed(1)}%)`;
+                                        }
+                                    }
+                                }
+                            },
+                            scales: {
+                                x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#666' } },
+                                y: { grid: { display: false }, ticks: { color: '#fff' } }
+                            }
+                        }
+                    });
+                }
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
